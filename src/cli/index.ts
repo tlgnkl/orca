@@ -8,6 +8,7 @@ import {
   specPaths,
   validateCommandAndFlags
 } from './args'
+import { installCliLauncherOwner } from './runtime/cli-launcher-owner'
 import { readOrcaCliVersion } from './cli-version'
 import { dispatch } from './dispatch'
 import {
@@ -233,5 +234,6 @@ async function runAgentTeamsTmuxShim(argv: string[]): Promise<void> {
 }
 
 if (require.main === module) {
+  installCliLauncherOwner()
   void main()
 }
