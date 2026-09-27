@@ -16,7 +16,7 @@ const { mockPtySpawn, mockPtyInstance } = vi.hoisted(() => ({
   }
 }))
 
-vi.mock('node-pty', () => ({ spawn: mockPtySpawn }))
+vi.mock('./relay-pty-runtime', () => ({ bunRelayPtyModule: { spawn: mockPtySpawn } }))
 
 import { PtyHandler } from './pty-handler'
 import type { RelayDispatcher } from './dispatcher'

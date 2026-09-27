@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
+import { ORCAD_BUN_VERSION } from '../../src/shared/orcad-bun-runtime.ts'
 import { constants } from 'node:fs'
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -19,14 +20,12 @@ const PLATFORMS = [
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const require = createRequire(import.meta.url)
 
-assert.match(process.versions.node, /^18\./, 'This smoke test must run under Node 18')
+assert.equal(process.versions.bun, ORCAD_BUN_VERSION, 'Run this smoke with the pinned Bun runtime')
 
-const home = await mkdtemp(join(tmpdir(), 'orca-managed-hook-node18-'))
-const originalHome = process.env.HOME
-const originalUserProfile = process.env.USERPROFILE
+const home = process.env.ORCA_MANAGED_HOOK_SMOKE_HOME
+assert.ok(home, 'Use run-managed-hook-runtime-smoke.mjs to supply an isolated home')
+assert.equal(homedir(), home, 'Refuse to install hooks outside the isolated smoke home')
 const originalGetuid = process.getuid
-process.env.HOME = home
-process.env.USERPROFILE = home
 process.getuid = undefined
 
 try {
@@ -47,18 +46,7 @@ try {
   await access(join(home, '.orca', 'agent-hooks', 'codex-hook.sh'), constants.X_OK)
   await access(join(home, '.orca', 'agent-hooks', 'claude-hook.sh'), constants.X_OK)
 } finally {
-  if (originalHome === undefined) {
-    delete process.env.HOME
-  } else {
-    process.env.HOME = originalHome
-  }
-  if (originalUserProfile === undefined) {
-    delete process.env.USERPROFILE
-  } else {
-    process.env.USERPROFILE = originalUserProfile
-  }
   process.getuid = originalGetuid
-  await rm(home, { recursive: true, force: true })
 }
 
-console.log('Node 18 managed-hook runtime smoke passed for all relay platforms.')
+console.log('Bundled Bun managed-hook runtime smoke passed for all relay platforms.')

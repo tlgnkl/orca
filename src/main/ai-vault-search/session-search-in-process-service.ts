@@ -4,7 +4,7 @@ import type { SessionSearchIndexerOptions } from './session-search-indexer-optio
 import { SessionSearchInstance } from './session-search-instance'
 import type { SessionSearchScanRoots } from './session-search-scan-roots'
 import { setSessionSearchService } from './session-search-service-registry'
-import { sessionSearchSqliteAvailable } from './session-search-sqlite-support'
+import { isSqliteAvailable } from '../sqlite/sync-database'
 
 /**
  * Registration for the two hosts that have no scanner-service child of their own.
@@ -18,9 +18,7 @@ import { sessionSearchSqliteAvailable } from './session-search-sqlite-support'
  * this one, and it is the only writer, so the two-process rebuild race the
  * desktop rule avoids cannot arise here.
  *
- * Returns null on a runtime with no `node:sqlite`: both hosts are built for a
- * Node 18 floor, and a host that cannot hold an index registers nothing rather
- * than answering `disabled` for a reason that is not consent.
+ * Returns null when the runtime cannot open SQLite, independently of user consent.
  */
 export function installInProcessSessionSearchService(args: {
   dataRoot: string
@@ -29,7 +27,7 @@ export function installInProcessSessionSearchService(args: {
   settings: AiVaultSearchSettings
   onError?: (error: unknown) => void
 }): { apply(settings: AiVaultSearchSettings): void; dispose(): void } | null {
-  if (!sessionSearchSqliteAvailable()) {
+  if (!isSqliteAvailable()) {
     return null
   }
   const instance = new SessionSearchInstance({

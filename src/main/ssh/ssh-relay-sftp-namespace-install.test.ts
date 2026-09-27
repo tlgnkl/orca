@@ -7,9 +7,6 @@ import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as RelayInstallMarkerModule from './ssh-relay-install-marker'
 
-vi.mock('./ssh-relay-opencode-runtime', () => ({
-  ensureRemoteOpenCodeRuntime: vi.fn().mockResolvedValue('ready')
-}))
 vi.mock('./ssh-relay-ripgrep-install', () => ({
   remoteRipgrepLayout: vi.fn().mockReturnValue(null),
   recordRemoteRipgrepReference: vi.fn().mockResolvedValue(false),
@@ -46,8 +43,8 @@ vi.mock('./ssh-relay-deploy-helpers', () => ({
   execCommand: vi.fn()
 }))
 
-vi.mock('./ssh-remote-node-resolution', () => ({
-  resolveRemoteNodePath: vi.fn().mockResolvedValue('/usr/bin/node')
+vi.mock('./ssh-relay-bun-runtime', () => ({
+  ensureRemoteRelayBunRuntime: vi.fn().mockResolvedValue('/usr/bin/node')
 }))
 
 vi.mock('./ssh-relay-install-marker', async (importOriginal) => ({
@@ -101,7 +98,7 @@ import {
   isRelayAlreadyInstalled
 } from './ssh-relay-versioned-install'
 import { tryAcquireRelayRepairLock } from './ssh-relay-repair-lock'
-import { BOTH_NATIVE_DEPS_MISSING_PROBE } from './ssh-relay-native-deps-install-fixture'
+import { WATCHER_MISSING_PROBE } from './ssh-relay-native-deps-install-fixture'
 import type { SshConnection } from './ssh-connection'
 import type { SftpNamespacePathMapping } from './sftp-namespace-resolution'
 
@@ -116,7 +113,6 @@ const SFTP_RELAY_DIR = `${SFTP_HOME}/${RELAY_SUFFIX}`
 const MARKER_PATTERN = /\.sftp-namespace-[0-9a-f]{32}/
 // Stdout of the relay-side pty-master cloexec patch, which runs on Linux hosts once a
 // freshly installed node-pty loads (#17915).
-const NPTY_CLOEXEC_PATCHED = 'ORCA-NPTY-CLOEXEC:patched\n'
 const STAGE_OWNER = '.sftp-namespace-00000000000000000000000000000000'
 const STAGE_RESERVED = `__ORCA_UPLOAD_STAGE_SLOT__${STAGE_OWNER}:slot-0`
 const STAGE_PROMOTED = `__ORCA_UPLOAD_STAGE_PROMOTION__${STAGE_OWNER}:PROMOTED`
@@ -254,7 +250,7 @@ function feed(responses: string[]): void {
   }
 }
 
-// POSIX first install, healthy npm install and node-pty probe.
+// POSIX first install, Bun watcher install.
 const POSIX_FIRST_INSTALL = [
   '__ORCA_REMOTE_PLATFORM__ Linux x86_64',
   SHELL_HOME,
@@ -263,13 +259,7 @@ const POSIX_FIRST_INSTALL = [
   '', // chmod staged node
   '', // final install namespace marker
   STAGE_PROMOTED,
-  '', // shared native-deps cache probe (miss)
-  '', // npm install native deps
-  '', // chmod prebuilds
-  'ORCA-NPTY-PROBE-OK\n',
-  '', // rm probe stderr
-  NPTY_CLOEXEC_PATCHED,
-  '', // promote into the shared native-deps cache
+  '', // Bun watcher install
   '', // clean stage root
   'DEAD',
   'READY'
@@ -282,13 +272,7 @@ const POSIX_SYSTEM_SSH_FIRST_INSTALL = [
   STAGE_RESERVED,
   '', // chmod staged node
   STAGE_PROMOTED,
-  '', // shared native-deps cache probe (miss)
-  '', // npm install native deps
-  '', // chmod prebuilds
-  'ORCA-NPTY-PROBE-OK\n',
-  '', // rm probe stderr
-  NPTY_CLOEXEC_PATCHED,
-  '', // promote into the shared native-deps cache
+  '', // Bun watcher install
   '', // clean stage root
   'DEAD',
   'READY'
@@ -298,14 +282,10 @@ const POSIX_SYSTEM_SSH_FIRST_INSTALL = [
 const POSIX_REPAIR = [
   '__ORCA_REMOTE_PLATFORM__ Linux x86_64',
   SHELL_HOME,
-  BOTH_NATIVE_DEPS_MISSING_PROBE, // probe before the repair lock: the marker names both deps
-  BOTH_NATIVE_DEPS_MISSING_PROBE, // re-probe under the lock
+  WATCHER_MISSING_PROBE, // probe before the repair lock: the marker names both deps
+  WATCHER_MISSING_PROBE, // re-probe under the lock
   '', // install-owner marker
-  '', // npm install native deps
-  '', // chmod prebuilds
-  'ORCA-NPTY-PROBE-OK\n',
-  '', // rm probe stderr
-  NPTY_CLOEXEC_PATCHED,
+  '', // Bun watcher install
   'DEAD',
   'READY'
 ]
@@ -355,7 +335,7 @@ describe('relay install writes on a split SFTP namespace', () => {
       `${capture.uploadTargets[0]}/.version`,
       `${SFTP_RELAY_DIR}/package.json`
     ])
-    // Every shell command — mkdir, chmod, npm, launch — still names the shell path.
+    // Every shell command — mkdir, chmod, Bun, launch — still names the shell path.
     for (const command of execCommands()) {
       expect(command).not.toContain(SFTP_RELAY_DIR)
     }
@@ -512,13 +492,17 @@ describe('relay install writes on a split SFTP namespace', () => {
       if (decoded.includes('__ORCA_UPLOAD_STAGE_PROMOTION__')) {
         return Promise.resolve(STAGE_PROMOTED)
       }
-      if (decoded.includes('npm install')) {
-        return Promise.reject(new Error('npm install failed'))
+      if (decoded.includes('install --ignore-scripts')) {
+        return Promise.reject(
+          Object.assign(new Error('Bun install termination unconfirmed'), {
+            sshChannelCloseConfirmed: false
+          })
+        )
       }
       return Promise.resolve('')
     })
 
-    await expect(deployAndLaunchRelay(conn)).rejects.toThrow('npm install failed')
+    await expect(deployAndLaunchRelay(conn)).rejects.toThrow('Bun install termination unconfirmed')
 
     expect(execCommands().some((command) => MARKER_PATTERN.test(command))).toBe(true)
     expect(capture.realpathCalls).toEqual([])
@@ -687,7 +671,7 @@ describe('relay repair writes on a split SFTP namespace', () => {
     const markerIndex = commands.findIndex((command) => MARKER_PATTERN.test(command))
     expect(markerIndex).toBeGreaterThan(execCountAtLock)
     // The re-probe under the lock is the last exec before the marker.
-    expect(commands[markerIndex - 1]).toContain('loadNativeModule')
+    expect(commands[markerIndex - 1]).toContain('ORCA-NATIVE-DEPS-OK')
     expect(capture.writePaths).toEqual([`${SFTP_RELAY_DIR}/package.json`])
   })
 
@@ -696,13 +680,9 @@ describe('relay repair writes on a split SFTP namespace', () => {
     feed([
       '__ORCA_REMOTE_PLATFORM__ Linux x86_64',
       SHELL_HOME,
-      BOTH_NATIVE_DEPS_MISSING_PROBE,
-      BOTH_NATIVE_DEPS_MISSING_PROBE,
-      '', // npm install native deps
-      '', // chmod prebuilds
-      'ORCA-NPTY-PROBE-OK\n',
-      '', // rm probe stderr
-      NPTY_CLOEXEC_PATCHED,
+      WATCHER_MISSING_PROBE,
+      WATCHER_MISSING_PROBE,
+      '', // Bun watcher install
       'DEAD',
       'READY'
     ])
@@ -721,16 +701,12 @@ describe('relay repair writes on a split SFTP namespace', () => {
     feed([
       '__ORCA_REMOTE_PLATFORM__ Linux x86_64',
       SHELL_HOME,
-      BOTH_NATIVE_DEPS_MISSING_PROBE,
-      BOTH_NATIVE_DEPS_MISSING_PROBE
+      WATCHER_MISSING_PROBE,
+      WATCHER_MISSING_PROBE
     ])
     vi.mocked(execCommand).mockRejectedValueOnce(new Error('read-only file system'))
     feed([
-      '', // npm install native deps
-      '', // chmod prebuilds
-      'ORCA-NPTY-PROBE-OK\n',
-      '', // rm probe stderr
-      NPTY_CLOEXEC_PATCHED,
+      '', // Bun watcher install
       'DEAD',
       'READY'
     ])
@@ -750,22 +726,20 @@ describe('relay repair writes on a split SFTP namespace', () => {
     feed([
       '__ORCA_REMOTE_PLATFORM__ Linux x86_64',
       SHELL_HOME,
-      BOTH_NATIVE_DEPS_MISSING_PROBE,
-      BOTH_NATIVE_DEPS_MISSING_PROBE
+      WATCHER_MISSING_PROBE,
+      WATCHER_MISSING_PROBE
     ])
     vi.mocked(execCommand).mockRejectedValueOnce(
       Object.assign(new Error('marker teardown unconfirmed'), { sshChannelCloseConfirmed: false })
     )
     feed(['DEAD', 'READY'])
 
-    await deployAndLaunchRelay(conn)
+    await expect(deployAndLaunchRelay(conn)).rejects.toThrow('marker teardown unconfirmed')
 
     expect(capture.writePaths).toEqual([])
     expect(execCommands().some((command) => command.includes('randomBytes'))).toBe(false)
     expect(vi.mocked(finalizeInstall)).not.toHaveBeenCalled()
     expect(vi.mocked(abandonInstall)).not.toHaveBeenCalled()
-    expect(warnSpy.mock.calls.map((args) => String(args[0]))).toContainEqual(
-      expect.stringContaining('launching degraded')
-    )
+    expect(conn.exec).not.toHaveBeenCalled()
   })
 })
