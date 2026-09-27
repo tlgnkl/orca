@@ -14,6 +14,7 @@ function main(): void {
       return
     }
     shuttingDown = true
+    process.stdin.destroy()
     decoder.close()
     writer.close()
     session.close()
